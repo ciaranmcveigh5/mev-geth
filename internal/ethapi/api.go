@@ -2341,14 +2341,13 @@ func (s *BundleAPI) EstimateGasBundle(ctx context.Context, args EstimateGasBundl
 	return ret, nil
 }
 
-// ---------------------------------------------------------------- Blink ----------------------------------------------------------------
-
-// CallBlinkBundleArgs represents the arguments for a call.
-type CallBlinkBundleArgs struct {
+// CallBundleQueryAddressArgs represents the arguments for a call.
+type CallBundleQueryAddressArgs struct {
 	Txs                    []hexutil.Bytes       `json:"txs"`
 	BlockNumber            rpc.BlockNumber       `json:"blockNumber"`
 	StateBlockNumberOrHash rpc.BlockNumberOrHash `json:"stateBlockNumber"`
 	Coinbase               *string               `json:"coinbase"`
+	QueryAddress           *string               `json:"queryAddress"`
 	Timestamp              *uint64               `json:"timestamp"`
 	Timeout                *int64                `json:"timeout"`
 	GasLimit               *uint64               `json:"gasLimit"`
@@ -2356,18 +2355,21 @@ type CallBlinkBundleArgs struct {
 	BaseFee                *big.Int              `json:"baseFee"`
 }
 
-// CallBundle will simulate a bundle of transactions at the top of a given block
+// CallBundleQueryAddress will simulate a bundle of transactions at the top of a given block
 // number with the state of another (or the same) block. This can be used to
 // simulate future blocks with the current state, or it can be used to simulate
 // a past block.
 // The sender is responsible for signing the transactions and using the correct
 // nonce and ensuring validity
-func (s *BundleAPI) CallBlinkBundle(ctx context.Context, args CallBlinkBundleArgs) (map[string]interface{}, error) {
+func (s *BundleAPI) CallBundleQueryAddress(ctx context.Context, args CallBundleQueryAddressArgs) (map[string]interface{}, error) {
 	if len(args.Txs) == 0 {
 		return nil, errors.New("bundle missing txs")
 	}
 	if args.BlockNumber == 0 {
 		return nil, errors.New("bundle missing blockNumber")
+	}
+	if args.QueryAddress == nil {
+		return nil, errors.New("bundle missing query address")
 	}
 
 	var txs types.Transactions
@@ -2391,6 +2393,7 @@ func (s *BundleAPI) CallBlinkBundle(ctx context.Context, args CallBlinkBundleArg
 		return nil, err
 	}
 	blockNumber := big.NewInt(int64(args.BlockNumber))
+	queryAddress := common.HexToAddress(*args.QueryAddress)
 
 	timestamp := parent.Time + 1
 	if args.Timestamp != nil {
@@ -2443,7 +2446,9 @@ func (s *BundleAPI) CallBlinkBundle(ctx context.Context, args CallBlinkBundleArg
 	gp := new(core.GasPool).AddGas(math.MaxUint64)
 
 	results := []map[string]interface{}{}
+
 	coinbaseBalanceBefore := state.GetBalance(coinbase)
+	queryAddressBalanceBefore := state.GetBalance(queryAddress)
 
 	bundleHash := sha3.NewLegacyKeccak256()
 	signer := types.MakeSigner(s.b.ChainConfig(), blockNumber)
@@ -2451,6 +2456,7 @@ func (s *BundleAPI) CallBlinkBundle(ctx context.Context, args CallBlinkBundleArg
 	gasFees := new(big.Int)
 	for i, tx := range txs {
 		coinbaseBalanceBeforeTx := state.GetBalance(coinbase)
+		queryAddressBalanceBeforeTx := state.GetBalance(queryAddress)
 		state.Prepare(tx.Hash(), i)
 
 		receipt, result, err := core.ApplyTransactionWithResult(s.b.ChainConfig(), s.chain, &coinbase, gp, state, header, tx, &header.GasUsed, vmconfig)
@@ -2493,6 +2499,8 @@ func (s *BundleAPI) CallBlinkBundle(ctx context.Context, args CallBlinkBundleArg
 			jsonResult["value"] = "0x" + string(dst)
 		}
 		coinbaseDiffTx := new(big.Int).Sub(state.GetBalance(coinbase), coinbaseBalanceBeforeTx)
+		queryAddressDiffTx := new(big.Int).Sub(state.GetBalance(queryAddress), queryAddressBalanceBeforeTx)
+		jsonResult["queryAddressDiff"] = queryAddressDiffTx.String()
 		jsonResult["coinbaseDiff"] = coinbaseDiffTx.String()
 		jsonResult["gasFees"] = gasFeesTx.String()
 		jsonResult["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiffTx, gasFeesTx).String()
@@ -2504,6 +2512,8 @@ func (s *BundleAPI) CallBlinkBundle(ctx context.Context, args CallBlinkBundleArg
 	ret := map[string]interface{}{}
 	ret["results"] = results
 	coinbaseDiff := new(big.Int).Sub(state.GetBalance(coinbase), coinbaseBalanceBefore)
+	queryAddressDiff := new(big.Int).Sub(state.GetBalance(queryAddress), queryAddressBalanceBefore)
+	ret["queryAddressDiff"] = queryAddressDiff.String()
 	ret["coinbaseDiff"] = coinbaseDiff.String()
 	ret["gasFees"] = gasFees.String()
 	ret["ethSentToCoinbase"] = new(big.Int).Sub(coinbaseDiff, gasFees).String()
